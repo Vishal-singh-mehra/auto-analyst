@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Dashboard — Auto-Analyst</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+
+    <h1>Dashboard</h1>
+
+    <p>
+        <a href="/">← Upload another file</a>
+    </p>
+
+    {% if no_data %}
+
+        <p>No data yet — upload a CSV first.</p>
+
+    {% else %}
+
+        <label for="column-select">
+            Forecast column:
+        </label>
+
+        <select id="column-select">
+
+            {% for col in columns %}
+
+                <option
+                    value="{{ col }}"
+                    {% if col == default_col %}selected{% endif %}
+                >
+                    {{ col }}
+                </option>
+
+            {% endfor %}
+
+        </select>
+
+        <p id="suggestion-note" style="color: #555; font-style: italic;">
+            {% if suggestion_reason %}
+                💡 {{ suggestion_reason }}
+            {% endif %}
+        </p>
+
+        <div style="margin: 10px 0;">
+            <button id="toggle-view" type="button">Show full history</button>
+        </div>
+
+        <p id="status"></p>
+        <div style="max-width: 900px;">
+            <canvas id="forecastChart"></canvas>
+        </div>
+
+        <script>
+            let chart = null;
+            let currentData = null;
+            let showingFull = false;
+
+            function rollingAverage(values, window = 7) {
+                return values.map((_, i) => {
+                    const start = Math.max(0, i - window + 1);
+                    const slice = values.slice(start, i + 1).filter(v => v !== null);
+                    if (slice.length === 0) return null;
+                    return slice.reduce((a, b) => a + b, 0) / slice.length;
+                });
+            }
+
+            function drawChart(data, full) {
+                let historyDates = data.history_dates;
+                let historyValues = data.history_values;
+
+                if (!full) {
+                    // Focused view: last 90 days of real history, so the forecast
+                    // isn't squeezed into an unreadable sliver at the edge.
+                    const keep = 90;
+                    historyDates = historyDates.slice(-keep);
+                    historyValues = historyValues.slice(-keep);
+                }
+
+                const allLabels = [...historyDates, ...data.forecast_dates];
+                const historyPadded = [...historyValues, ...Array(data.forecast_dates.length).fill(null)];
+                const forecastPadded = [
+                    ...Array(historyDates.length - 1).fill(null),
+                    historyValues[historyValues.length - 1],
+                    ...data.forecast_values,
+                ];
+
+                const datasets = [
+                    { label: "History", data: historyPadded, borderColor: "blue", pointRadius: 0, borderWidth: full ? 1 : 2 },
+                    { label: "Forecast", data: forecastPadded, borderColor: "orange", borderDash: [5, 5], pointRadius: 0, borderWidth: 2 },
+                ];
+
+                if (full) {
+                    // Raw daily data over 5 years is too noisy to read as a trend —
+                    // add a 7-day rolling average so the actual pattern is visible.
+                    const smoothed = rollingAverage(historyValues, 7);
+                    const smoothedPadded = [...smoothed, ...Array(data.forecast_dates.length).fill(null)];
+                    datasets.push({
+                        label: "7-day average",
+                        data: smoothedPadded,
+                        borderColor: "red",
+                        pointRadius: 0,
+                        borderWidth: 2,
+                    });
+                }
+
+                if (chart) chart.destroy();
+                chart = new Chart(document.getElementById("forecastChart"), {
+                    type: "line",
+                    data: { labels: allLabels, datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: "index", intersect: false },
+                    },
+                });
+            }
+
+            async function loadForecast(column) {
+                const statusEl = document.getElementById("status");
+                statusEl.innerText = "Loading...";
+
+                let response;
+                try {
+                    response = await fetch(`/api/forecast?column=${encodeURIComponent(column)}`);
+                } catch (networkError) {
+                    statusEl.innerText = "Network error — is the server running?";
+                    return;
+                }
+
+                if (!response.ok) {
+                    statusEl.innerText = `Server error (${response.status}) — try again.`;
+                    return;
+                }
+
+                let data;
+                try {
+                    data = await response.json();
+                } catch (parseError) {
+                    statusEl.innerText = "Received an unexpected response from the server.";
+                    return;
+                }
+
+                if (data.error) {
+                    statusEl.innerText = "Error: " + data.error;
+                    return;
+                }
+
+                statusEl.innerText = "";
+                currentData = data;
+                drawChart(currentData, showingFull);
+            }
+
+            const select = document.getElementById("column-select");
+            const toggleBtn = document.getElementById("toggle-view");
+
+            toggleBtn.addEventListener("click", () => {
+                showingFull = !showingFull;
+                toggleBtn.innerText = showingFull ? "Show recent + forecast" : "Show full history";
+                if (currentData) drawChart(currentData, showingFull);
+            });
+
+            select.addEventListener("change", () => {
+                document.getElementById("suggestion-note").innerText = "";
+                loadForecast(select.value);
+            });
+
+            loadForecast(select.value);
+        </script>
+
+    {% endif %}
+
+</body>
+
+</html>

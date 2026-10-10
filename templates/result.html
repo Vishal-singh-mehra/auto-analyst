@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cleaning Report — Auto-Analyst</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Cleaning Report</h1>
+    <p>File: <strong>{{ filename }}</strong></p>
+
+    <h2>Summary</h2>
+    <ul>
+        <li>Rows: {{ summary.rows_before }} → {{ summary.rows_after }}</li>
+        <li>Columns: {{ summary.cols_before }} → {{ summary.cols_after }}</li>
+    </ul>
+
+    <h2>Actions Taken</h2>
+    <ul>
+        {% for item in log %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+     <p>
+        <a href="/report/{{ report_name }}" target="_blank">View full EDA report →</a>
+    </p>
+    
+    <p><a href="/dashboard">Go to Dashboard →</a></p>
+    
+        <h2>Forecast</h2>
+    {% if has_forecast %}
+    <p>✅ Forecast generated — chart coming in the next phase.</p>
+    <p><em>{{ selection_reason }}</em></p>
+    <p><em>{{ fill_reason }}</em></p>
+    {% else %}
+    <p>{{ forecast_message }}</p>
+    {% endif %}
+
+    <h2>Preview (first 10 rows)</h2>
+    {{ preview|safe }}
+
+    <p><a href="/">Upload another file</a></p>
+   
+</body>
+</html>

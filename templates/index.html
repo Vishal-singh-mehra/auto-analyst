@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auto-Analyst</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Auto-Analyst</h1>
+    <p>From raw CSV to automated forecasts.</p>
+        {% if error %}
+    <p style="color: red;">{{ error }}</p>
+    {% endif %}
+
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv" required>
+        <button type="submit">Upload CSV</button>
+    </form>
+</body>
+</html>

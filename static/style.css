@@ -1,0 +1,83 @@
+* { box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+    background: #f7f8fa;
+    color: #1a1a1a;
+}
+
+h1 {
+    color: #1f3864;
+    border-bottom: 3px solid #1f3864;
+    padding-bottom: 8px;
+}
+
+h2 {
+    color: #2c4a7c;
+    margin-top: 28px;
+}
+
+a {
+    color: #1155cc;
+}
+
+form {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    margin: 16px 0;
+}
+
+input[type="file"] {
+    margin-right: 10px;
+}
+
+button {
+    background: #1f3864;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+button:hover {
+    background: #2c4a7c;
+}
+
+table.preview {
+    border-collapse: collapse;
+    width: 100%;
+    background: white;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+table.preview th, table.preview td {
+    border: 1px solid #e0e0e0;
+    padding: 6px 10px;
+    text-align: left;
+    font-size: 14px;
+}
+
+table.preview th {
+    background: #1f3864;
+    color: white;
+}
+
+select, .error {
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+}
+
+.error {
+    color: #c0392b;
+    background: #fdecea;
+    border: 1px solid #f5c6cb;
+    display: inline-block;
+}
