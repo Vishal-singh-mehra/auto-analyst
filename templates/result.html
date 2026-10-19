@@ -1,44 +1,77 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Cleaning Report — Auto-Analyst</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <h1>Cleaning Report</h1>
-    <p>File: <strong>{{ filename }}</strong></p>
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block title %}Results{% endblock %}
 
-    <h2>Summary</h2>
-    <ul>
-        <li>Rows: {{ summary.rows_before }} → {{ summary.rows_after }}</li>
-        <li>Columns: {{ summary.cols_before }} → {{ summary.cols_after }}</li>
-    </ul>
+{% block body %}
+<main class="page">
+    <div class="head-row">
+        <div>
+            <h1>Results</h1>
+            <p class="hint" style="margin-top: 6px;">for <strong style="color: var(--ink);">{{ filename }}</strong></p>
+        </div>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            {% if has_forecast %}<a class="btn btn-primary" href="/dashboard?dataset={{ dataset }}">Open the dashboard</a>{% endif %}
+            <a class="btn" href="/download/{{ filename }}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+                Download cleaned CSV
+            </a>
+        </div>
+    </div>
 
-    <h2>Actions Taken</h2>
-    <ul>
-        {% for item in log %}
-        <li>{{ item }}</li>
-        {% endfor %}
-    </ul>
-     <p>
-        <a href="/report/{{ report_name }}" target="_blank">View full EDA report →</a>
-    </p>
-    
-    <p><a href="/dashboard">Go to Dashboard →</a></p>
-    
+    <section class="section" style="margin-top: 32px;">
         <h2>Forecast</h2>
-    {% if has_forecast %}
-    <p>✅ Forecast generated — chart coming in the next phase.</p>
-    <p><em>{{ selection_reason }}</em></p>
-    <p><em>{{ fill_reason }}</em></p>
-    {% else %}
-    <p>{{ forecast_message }}</p>
-    {% endif %}
+        {% if has_forecast and forecast_summary %}
+        <div class="statement">
+            <div class="line">Expected {{ forecast_summary.kind }} of <strong>{{ forecast_summary.metric }}</strong> for the next {{ forecast_summary.days }} days</div>
+            <div class="total">{% if forecast_summary.kind == "total" or forecast_summary.value|abs >= 100 %}{{ "{:,.0f}".format(forecast_summary.value) }}{% else %}{{ "{:.1f}".format(forecast_summary.value) }}{% endif %}</div>
+            {% if forecast_summary.change_pct is not none %}
+            <div class="line">{% if forecast_summary.change_pct|abs < 1 %}About the same as the last {{ forecast_summary.days }} days.{% else %}<strong>{{ "{:.0f}".format(forecast_summary.change_pct|abs) }}% {{ "higher" if forecast_summary.change_pct > 0 else "lower" }}</strong> than the last {{ forecast_summary.days }} days.{% endif %}</div>
+            {% endif %}
+            <p class="detail">
+                {% if forecast_summary.weekly_error_pct is not none %}On past data it was typically off by about {{ forecast_summary.weekly_error_pct|round(0, 'ceil')|int }}% on a weekly {{ forecast_summary.weekly_word }}{% if forecast_summary.total_error_pct is not none %} and {{ forecast_summary.total_error_pct|round(0, 'ceil')|int }}% on the {{ forecast_summary.days }}-day {{ forecast_summary.weekly_word }}{% endif %}. {% endif %}
+                {% if forecast_summary.method %}Method: {{ forecast_summary.method }}. {% endif %}
+                {{ selection_reason }} {{ fill_reason }}
+            </p>
+        </div>
+        {% else %}
+        <div class="statement"><p class="line" style="margin: 0;">{{ forecast_message }}</p></div>
+        {% endif %}
+    </section>
 
-    <h2>Preview (first 10 rows)</h2>
-    {{ preview|safe }}
+    <section class="section">
+        <h2>Data health</h2>
+        <div>
+            <div class="leader"><span class="k">Rows kept</span><span class="v">{{ "{:,}".format(summary.rows_after) }} <small>of {{ "{:,}".format(summary.rows_before) }} uploaded</small></span></div>
+            <div class="leader"><span class="k">Columns kept</span><span class="v">{{ summary.cols_after }} <small>of {{ summary.cols_before }} uploaded</small></span></div>
+            <div class="leader"><span class="k">Missing values</span><span class="v">{{ "{:,}".format(summary.missing_before) }} <small>{{ "none left" if summary.missing_after == 0 else "{:,} left".format(summary.missing_after) }}</small></span></div>
+            <div class="leader"><span class="k">Duplicate rows removed</span><span class="v">{{ "{:,}".format(summary.duplicates_removed) }}</span></div>
+        </div>
+    </section>
 
-    <p><a href="/">Upload another file</a></p>
-   
-</body>
-</html>
+    <section class="section">
+        <h2>What was checked and done</h2>
+        <ul class="ticks">
+            {% if summary.missing_before == 0 %}<li>No missing values found</li>{% endif %}
+            {% if summary.duplicates_removed == 0 %}<li>No duplicate rows found</li>{% endif %}
+            {% for item in log %}<li class="did">{{ item }}</li>{% endfor %}
+        </ul>
+    </section>
+
+    <section class="section">
+        <h2>Detailed data report</h2>
+        {% if report_name %}
+        <p><a href="/report/{{ report_name }}" target="_blank" rel="noopener">Open the full report in a new tab</a> <span class="hint">with distributions, missing values and correlations.</span></p>
+        {% else %}
+        <p class="hint">No detailed report was created for this file.</p>
+        {% endif %}
+        {% if report_note %}<p class="hint">{{ report_note }}</p>{% endif %}
+    </section>
+
+    <section class="section">
+        <h2>Preview of the first 10 rows</h2>
+        <div class="table-wrap">{{ preview|safe }}</div>
+    </section>
+
+    <p style="margin-top: 40px;"><a href="/">Upload another file</a></p>
+</main>
+{% endblock %}

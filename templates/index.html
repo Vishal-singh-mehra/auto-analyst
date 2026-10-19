@@ -1,19 +1,145 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Auto-Analyst</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <h1>Auto-Analyst</h1>
-    <p>From raw CSV to automated forecasts.</p>
-        {% if error %}
-    <p style="color: red;">{{ error }}</p>
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block title %}Upload{% endblock %}
+
+{% block body %}
+<section class="hero">
+    <div class="hero-in"><div class="hero-grid">
+        <div>
+            <h1>Your sales file, cleaned and forecast</h1>
+            <p class="lede">Upload a CSV from your billing software or spreadsheet. Auto-Analyst fixes the data, forecasts the next 30 days, and tells you how far off it usually is.</p>
+        </div>
+
+        <div class="sheet">
+            <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+                <label class="dropzone" id="dropzone">
+                    <input type="file" name="file" id="file" accept=".csv" required>
+                    <div class="dz-empty">
+                        <p class="dz-title">Drop a CSV file here</p>
+                        <p class="dz-sub">or click to choose one. Dates like 05/01/2023, rupee amounts and Excel exports are handled.</p>
+                    </div>
+                    <div class="dz-file">
+                        <span class="stamp" aria-hidden="true">RECEIVED</span>
+                        <div>
+                            <div class="fname" id="fname"></div>
+                            <div class="hint" id="fsize"></div>
+                        </div>
+                    </div>
+                </label>
+                {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+                <p class="err" id="client-error" role="alert" hidden></p>
+                <div class="sheet-actions">
+                    <button class="btn btn-primary" id="go" type="submit" disabled>Clean and forecast</button>
+                    {% if has_demo %}
+                    <button class="btn" type="submit" formaction="/demo" formnovalidate id="demo">Try with demo data</button>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div></div>
+</section>
+
+<main class="page">
+    {% if datasets %}
+    <section class="section" style="margin-top: 8px;">
+        <h2>Your datasets</h2>
+        <div class="rows">
+            {% for d in datasets %}
+            <div class="row">
+                <div class="grow">
+                    <div class="name">{{ d.name }}</div>
+                    <div class="meta">{{ "{:,}".format(d.rows) }} rows, uploaded {{ d.when }}</div>
+                </div>
+                <a class="btn btn-small" href="/dashboard?dataset={{ d.table }}">Open dashboard</a>
+                <form action="/dataset/delete" method="post" onsubmit="return confirm('Remove {{ d.name|e }}? This cannot be undone.');">
+                    <input type="hidden" name="table" value="{{ d.table }}">
+                    <button class="btn-link danger" type="submit">Remove</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
     {% endif %}
 
-    <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv" required>
-        <button type="submit">Upload CSV</button>
-    </form>
-</body>
-</html>
+    <section class="section">
+        <h2>What you get</h2>
+        <div class="cols3">
+            <div>
+                <h3>Clean data</h3>
+                <p>Dates, rupee amounts, blanks and duplicates are fixed, and every change is listed so nothing happens behind your back.</p>
+            </div>
+            <div>
+                <h3>A forecast you can check</h3>
+                <p>Four methods are tested on your own past data. The best one is used, and its typical error is shown next to the forecast.</p>
+            </div>
+            <div>
+                <h3>Reasons, not a black box</h3>
+                <p>See why a column was chosen, and switch to another with one click. Weekly, daily and monthly views are a button away.</p>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="overlay" id="overlay" role="alertdialog" aria-live="polite" aria-labelledby="ov-title" hidden>
+    <div class="overlay-card">
+        <div class="spin" aria-hidden="true"></div>
+        <h2 id="ov-title">Working on your file</h2>
+        <ul class="steps" id="steps">
+            <li>Reading the file</li>
+            <li>Fixing dates, numbers and gaps</li>
+            <li>Building the data report</li>
+            <li>Testing forecast methods on your past data</li>
+        </ul>
+        <p class="hint" style="margin: 14px 0 0;">Large files can take up to half a minute.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const zone = document.getElementById("dropzone"), input = document.getElementById("file");
+    const go = document.getElementById("go"), clientError = document.getElementById("client-error");
+
+    function human(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1048576) return (bytes / 1024).toFixed(0) + " KB";
+        return (bytes / 1048576).toFixed(1) + " MB";
+    }
+
+    function setFile(file) {
+        clientError.hidden = true;
+        if (!file) return;
+        if (!/\.csv$/i.test(file.name)) {
+            input.value = "";
+            zone.classList.remove("has-file");
+            go.disabled = true;
+            clientError.textContent = "That is not a .csv file. Save your spreadsheet as CSV and try again.";
+            clientError.hidden = false;
+            return;
+        }
+        // allow line breaks only after _ . - so a long file name never breaks in the middle of a word
+        document.getElementById("fname").textContent = file.name.replace(/([_.\-])/g, "$1\u200b");
+        document.getElementById("fsize").textContent = human(file.size) + ". Ready to clean and forecast.";
+        zone.classList.add("has-file");
+        go.disabled = false;
+    }
+
+    input.addEventListener("change", () => setFile(input.files[0]));
+    ["dragenter", "dragover"].forEach((t) => zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.remove("over"); }));
+    zone.addEventListener("drop", (e) => {
+        if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; setFile(input.files[0]); }
+    });
+
+    // Show real progress wording while the server works (the page reloads when it is done).
+    function showOverlay() {
+        const overlay = document.getElementById("overlay"), items = [...document.querySelectorAll("#steps li")];
+        overlay.hidden = false;
+        let i = 0;
+        const paint = () => items.forEach((li, k) => { li.className = k < i ? "done" : k === i ? "now" : ""; });
+        paint();
+        setInterval(() => { if (i < items.length - 1) { i += 1; paint(); } }, 2600);
+    }
+    document.getElementById("upload-form").addEventListener("submit", showOverlay);
+</script>
+{% endblock %}

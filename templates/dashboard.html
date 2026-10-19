@@ -1,180 +1,322 @@
-<!DOCTYPE html>
-<html>
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block title %}Dashboard{% endblock %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>{% endblock %}
 
-<head>
-    <title>Dashboard — Auto-Analyst</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-</head>
-
-<body>
-
-    <h1>Dashboard</h1>
-
-    <p>
-        <a href="/">← Upload another file</a>
-    </p>
+{% block body %}
+<main class="page">
+    <div class="head-row">
+        <h1>Dashboard</h1>
+        {% if datasets and datasets|length > 1 %}
+        <label class="field"><span>Dataset</span>
+            <select id="dataset-select">
+                {% for d in datasets %}<option value="{{ d.table }}" {% if d.table == dataset %}selected{% endif %}>{{ d.name }} ({{ "{:,}".format(d.rows) }} rows)</option>{% endfor %}
+            </select>
+        </label>
+        {% endif %}
+    </div>
 
     {% if no_data %}
-
-        <p>No data yet — upload a CSV first.</p>
-
+    <div class="empty">
+        <h2>{{ message or "Nothing to show yet" }}</h2>
+        <p class="hint">{% if message %}Pick another dataset above, or upload a file that has a date column and a number to forecast.{% else %}Upload a CSV file and your forecast will appear here.{% endif %}</p>
+        <a class="btn btn-primary" href="/">Upload a file</a>
+    </div>
     {% else %}
 
-        <label for="column-select">
-            Forecast column:
+    <div class="controls">
+        <label class="field"><span>Forecast</span>
+            <select id="column-select">
+                {% for col in columns %}<option value="{{ col }}" {% if col == default_col %}selected{% endif %}>{{ "Number of records per day" if col == "record_count" else col }}</option>{% endfor %}
+            </select>
         </label>
+        <p id="suggestion-note" class="hint" style="margin: 0;">{% if suggestion_reason %}{{ suggestion_reason }}{% endif %}</p>
+    </div>
+    <p id="status" class="status" role="status"></p>
 
-        <select id="column-select">
-
-            {% for col in columns %}
-
-                <option
-                    value="{{ col }}"
-                    {% if col == default_col %}selected{% endif %}
-                >
-                    {{ col }}
-                </option>
-
-            {% endfor %}
-
-        </select>
-
-        <p id="suggestion-note" style="color: #555; font-style: italic;">
-            {% if suggestion_reason %}
-                💡 {{ suggestion_reason }}
-            {% endif %}
-        </p>
-
-        <div style="margin: 10px 0;">
-            <button id="toggle-view" type="button">Show full history</button>
+    <section class="strip" aria-live="polite">
+        <div class="cell">
+            <div class="cell-label" id="k-label"><span class="skeleton">Expected total for the next 30 days</span></div>
+            <div class="figure skeleton" id="k-value">0,000,000</div>
+            <div id="k-delta"></div>
         </div>
-
-        <p id="status"></p>
-        <div style="max-width: 900px;">
-            <canvas id="forecastChart"></canvas>
+        <div class="cell">
+            <div class="cell-label">How far off it usually is</div>
+            <dl class="errs" id="k-errs"><div><dt class="skeleton">Weekly</dt><dd class="skeleton">0%</dd></div><div><dt class="skeleton">Daily</dt><dd class="skeleton">0%</dd></div></dl>
         </div>
+        <div class="cell">
+            <div class="cell-label">Method</div>
+            <div class="method skeleton" id="k-method">Testing methods</div>
+            <div class="hint" id="k-tested" style="margin-top: 6px;"></div>
+        </div>
+    </section>
 
-        <script>
-            let chart = null;
-            let currentData = null;
-            let showingFull = false;
+    <section class="panel">
+        <div class="panel-head">
+            <div class="seg" role="group" aria-label="Chart view">
+                <button type="button" data-view="weekly" aria-pressed="true">Weekly</button>
+                <button type="button" data-view="daily" aria-pressed="false">Daily</button>
+                <button type="button" data-view="monthly" aria-pressed="false">Monthly</button>
+            </div>
+            <div class="actions">
+                <button class="btn btn-small" type="button" id="dl-png">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>
+                    Save chart
+                </button>
+                <button class="btn btn-small" type="button" id="dl-csv">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+                    Download forecast
+                </button>
+            </div>
+        </div>
+        <div class="chart-box" id="chart-box"><canvas id="forecastChart" role="img" aria-label="Chart of past values and the forecast"></canvas></div>
+        <p id="view-note" class="hint" style="margin: 10px 0 0;"></p>
+    </section>
 
-            function rollingAverage(values, window = 7) {
-                return values.map((_, i) => {
-                    const start = Math.max(0, i - window + 1);
-                    const slice = values.slice(start, i + 1).filter(v => v !== null);
-                    if (slice.length === 0) return null;
-                    return slice.reduce((a, b) => a + b, 0) / slice.length;
-                });
-            }
+    <details class="panel">
+        <summary id="table-title">Forecast by week</summary>
+        <div class="body">
+            <table class="mini"><thead><tr><th id="th-when">Week of</th><th>Forecast</th><th>Likely low</th><th>Likely high</th></tr></thead><tbody id="forecast-rows"></tbody></table>
+        </div>
+    </details>
 
-            function drawChart(data, full) {
-                let historyDates = data.history_dates;
-                let historyValues = data.history_values;
-
-                if (!full) {
-                    // Focused view: last 90 days of real history, so the forecast
-                    // isn't squeezed into an unreadable sliver at the edge.
-                    const keep = 90;
-                    historyDates = historyDates.slice(-keep);
-                    historyValues = historyValues.slice(-keep);
-                }
-
-                const allLabels = [...historyDates, ...data.forecast_dates];
-                const historyPadded = [...historyValues, ...Array(data.forecast_dates.length).fill(null)];
-                const forecastPadded = [
-                    ...Array(historyDates.length - 1).fill(null),
-                    historyValues[historyValues.length - 1],
-                    ...data.forecast_values,
-                ];
-
-                const datasets = [
-                    { label: "History", data: historyPadded, borderColor: "blue", pointRadius: 0, borderWidth: full ? 1 : 2 },
-                    { label: "Forecast", data: forecastPadded, borderColor: "orange", borderDash: [5, 5], pointRadius: 0, borderWidth: 2 },
-                ];
-
-                if (full) {
-                    // Raw daily data over 5 years is too noisy to read as a trend —
-                    // add a 7-day rolling average so the actual pattern is visible.
-                    const smoothed = rollingAverage(historyValues, 7);
-                    const smoothedPadded = [...smoothed, ...Array(data.forecast_dates.length).fill(null)];
-                    datasets.push({
-                        label: "7-day average",
-                        data: smoothedPadded,
-                        borderColor: "red",
-                        pointRadius: 0,
-                        borderWidth: 2,
-                    });
-                }
-
-                if (chart) chart.destroy();
-                chart = new Chart(document.getElementById("forecastChart"), {
-                    type: "line",
-                    data: { labels: allLabels, datasets },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        interaction: { mode: "index", intersect: false },
-                    },
-                });
-            }
-
-            async function loadForecast(column) {
-                const statusEl = document.getElementById("status");
-                statusEl.innerText = "Loading...";
-
-                let response;
-                try {
-                    response = await fetch(`/api/forecast?column=${encodeURIComponent(column)}`);
-                } catch (networkError) {
-                    statusEl.innerText = "Network error — is the server running?";
-                    return;
-                }
-
-                if (!response.ok) {
-                    statusEl.innerText = `Server error (${response.status}) — try again.`;
-                    return;
-                }
-
-                let data;
-                try {
-                    data = await response.json();
-                } catch (parseError) {
-                    statusEl.innerText = "Received an unexpected response from the server.";
-                    return;
-                }
-
-                if (data.error) {
-                    statusEl.innerText = "Error: " + data.error;
-                    return;
-                }
-
-                statusEl.innerText = "";
-                currentData = data;
-                drawChart(currentData, showingFull);
-            }
-
-            const select = document.getElementById("column-select");
-            const toggleBtn = document.getElementById("toggle-view");
-
-            toggleBtn.addEventListener("click", () => {
-                showingFull = !showingFull;
-                toggleBtn.innerText = showingFull ? "Show recent + forecast" : "Show full history";
-                if (currentData) drawChart(currentData, showingFull);
-            });
-
-            select.addEventListener("change", () => {
-                document.getElementById("suggestion-note").innerText = "";
-                loadForecast(select.value);
-            });
-
-            loadForecast(select.value);
-        </script>
+    <details class="panel">
+        <summary>How to read this chart</summary>
+        <div class="body">
+            <p>The <strong style="color: var(--data);">blue line</strong> is what actually happened. The <strong style="color: var(--forecast);">orange dashed line</strong> is the forecast, and the shaded orange area is the range most periods landed in when the same method was tested on your past data.</p>
+            <p>Click a name in the chart legend to hide or show a line. Hover over the chart to see exact values. Weekly view is the easiest to read, because single days jump around too much to predict.</p>
+            <p class="hint" style="margin: 0;">Accuracy figures come from past data. They show how the method has behaved, not a promise about the future.</p>
+        </div>
+    </details>
 
     {% endif %}
+</main>
+{% endblock %}
 
-</body>
+{% block scripts %}
+{% if datasets and datasets|length > 1 %}
+<script>
+    document.getElementById("dataset-select").addEventListener("change", function () {
+        window.location = "/dashboard?dataset=" + encodeURIComponent(this.value);
+    });
+</script>
+{% endif %}
+{% if not no_data %}
+<script>
+    const DATASET = {{ dataset|tojson }};
+    let chart = null, currentData = null, currentView = "weekly", currentColumn = null;
 
-</html>
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const fmtNum = (v) => Math.round(v).toLocaleString();
+    const labelFor = (col) => col === "record_count" ? "number of records per day" : col.replace(/_/g, " ");
+    const unitWord = (data) => data.aggregation === "sum" ? "total" : "average";
+    const fmtFig = (data, v) => data.aggregation === "sum" || Math.abs(v) >= 100 ? fmtNum(v) : v.toFixed(1);
+
+    function short(v) {
+        const a = Math.abs(v);
+        if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+        if (a >= 1e3) return (v / 1e3).toFixed(0) + "K";
+        return String(Math.round(v));
+    }
+    function fmtDate(iso, kind) {
+        const [y, m, d] = iso.split("-").map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString("en-GB", kind === "month" ? { month: "short", year: "numeric" } : { day: "numeric", month: "short" });
+    }
+    function rollingAverage(values, window = 7) {
+        return values.map((_, i) => {
+            const slice = values.slice(Math.max(0, i - window + 1), i + 1);
+            return slice.reduce((a, b) => a + b, 0) / slice.length;
+        });
+    }
+
+    function buildChart(data, view) {
+        const BLUE = css("--data"), ORANGE = css("--forecast"), BAND = css("--band");
+        let labels, datasets, dividerIndex = null, tooltipPrefix = "";
+        const band = (nHist, low, high) => low && high ? [
+            { label: "range-low", data: [...Array(nHist).fill(null), ...low], borderWidth: 0, pointRadius: 0, fill: false, isBand: true },
+            { label: "Likely range", data: [...Array(nHist).fill(null), ...high], borderWidth: 0, pointRadius: 0, backgroundColor: BAND, fill: "-1", isBand: true },
+        ] : [];
+
+        if (view === "weekly") {
+            const w = data.weekly, nH = w.history_dates.length, nF = w.forecast_dates.length;
+            labels = [...w.history_dates, ...w.forecast_dates].map((d) => fmtDate(d));
+            datasets = [
+                { label: "Weekly " + unitWord(data), data: [...w.history_values, ...Array(nF).fill(null)], borderColor: BLUE, backgroundColor: BLUE, borderWidth: 3, pointRadius: 3, pointHoverRadius: 6, tension: 0.2 },
+                { label: "Forecast", data: [...Array(nH - 1).fill(null), w.history_values[nH - 1], ...w.forecast_values], borderColor: ORANGE, backgroundColor: ORANGE, borderDash: [6, 5], borderWidth: 3, pointRadius: 3, pointHoverRadius: 6, tension: 0.2 },
+                ...band(nH, w.forecast_low, w.forecast_high),
+            ];
+            dividerIndex = nH - 1; tooltipPrefix = "Week of ";
+        } else if (view === "daily") {
+            const keep = 90, hDates = data.history_dates.slice(-keep), hVals = data.history_values.slice(-keep);
+            const nH = hDates.length, nF = data.forecast_dates.length, smooth = rollingAverage(hVals, 7);
+            labels = [...hDates, ...data.forecast_dates].map((d) => fmtDate(d));
+            datasets = [
+                { label: "Each day", data: [...hVals, ...Array(nF).fill(null)], borderColor: BLUE + "66", borderWidth: 1, pointRadius: 0 },
+                { label: "7-day average", data: [...smooth, ...Array(nF).fill(null)], borderColor: BLUE, borderWidth: 3, pointRadius: 0, tension: 0.3 },
+                { label: "Forecast", data: [...Array(nH - 1).fill(null), smooth[nH - 1], ...data.forecast_values], borderColor: ORANGE, borderDash: [6, 5], borderWidth: 3, pointRadius: 0 },
+                ...band(nH, data.forecast_low, data.forecast_high),
+            ];
+            dividerIndex = nH - 1;
+        } else {
+            const m = data.monthly;
+            labels = m.dates.map((d) => fmtDate(d, "month"));
+            datasets = [{ label: "Monthly " + unitWord(data), data: m.values, borderColor: BLUE, backgroundColor: BLUE, borderWidth: 3, pointRadius: 3, pointHoverRadius: 6, tension: 0.2 }];
+        }
+
+        const surface = css("--surface"), muted = css("--muted"), grid = css("--rule");
+        const decorations = {
+            id: "decorations",
+            beforeDraw(c) {                                   // solid background, so a saved PNG is never transparent
+                c.ctx.save(); c.ctx.fillStyle = surface; c.ctx.fillRect(0, 0, c.width, c.height); c.ctx.restore();
+            },
+            beforeDatasetsDraw(c) {                           // a light wash over the forecast period
+                if (dividerIndex === null) return;
+                const x = c.scales.x.getPixelForValue(dividerIndex), { top, bottom, right } = c.chartArea;
+                c.ctx.save(); c.ctx.fillStyle = css("--wash"); c.ctx.fillRect(x, top, right - x, bottom - top); c.ctx.restore();
+            },
+            afterDatasetsDraw(c) {
+                if (dividerIndex === null) return;
+                const x = c.scales.x.getPixelForValue(dividerIndex), { top, bottom } = c.chartArea, ctx = c.ctx;
+                ctx.save(); ctx.strokeStyle = muted; ctx.setLineDash([4, 4]);
+                ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+                ctx.setLineDash([]); ctx.fillStyle = muted; ctx.font = "12px " + css("--sans");
+                ctx.fillText("Forecast", x + 8, top + 15); ctx.restore();
+            },
+        };
+        return {
+            type: "line",
+            data: { labels, datasets },
+            plugins: [decorations],
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false, resizeDelay: 80,
+                interaction: { mode: "index", intersect: false },
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: muted, maxTicksLimit: 8, maxRotation: 0 } },
+                    y: { grace: "8%", grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: (v) => short(v) },
+                         afterFit(scale) { scale.paddingTop = Math.max(scale.paddingTop || 0, 26); } },     // keep the top label clear of the legend
+                },
+                plugins: {
+                    legend: { position: "top", align: "start", labels: { color: css("--ink"), usePointStyle: true, boxWidth: 8, boxHeight: 8, padding: 20, filter: (item) => item.text !== "range-low" } },
+                    tooltip: {
+                        filter: (item) => !item.dataset.isBand,
+                        callbacks: { title: (items) => tooltipPrefix + items[0].label, label: (ctx) => ctx.dataset.label + ": " + fmtNum(ctx.parsed.y) },
+                    },
+                },
+            },
+        };
+    }
+
+    function drawChart() {
+        if (chart) chart.destroy();
+        chart = new Chart(document.getElementById("forecastChart"), buildChart(currentData, currentView));
+        document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.view === currentView));
+        const w = unitWord(currentData);
+        document.getElementById("view-note").textContent = {
+            weekly: `Each point is one week's ${w} (7 days). Weekly figures are much easier to read than daily ups and downs.`,
+            daily: "The faint line is each day. The solid line is the 7-day average, which smooths day-to-day swings.",
+            monthly: `Each point is one full calendar month's ${w}, the long-term picture.`,
+        }[currentView];
+    }
+
+    function countUp(el, target, render) {
+        if (reduceMotion) { el.textContent = render(target); return; }
+        const start = performance.now(), dur = 700;
+        const step = (now) => {
+            const t = Math.min(1, (now - start) / dur), eased = 1 - Math.pow(1 - t, 3);
+            el.textContent = render(target * eased);
+            if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    }
+
+    function showSummary(data, column) {
+        const n = data.forecast_dates.length, isSum = data.aggregation === "sum";
+        const now = isSum ? data.forecast_total : data.forecast_average;
+        const before = (isSum ? 1 : 1 / n) * data.history_values.slice(-n).reduce((a, b) => a + b, 0);
+
+        document.getElementById("k-label").textContent = `Expected ${isSum ? "total" : "average per day"} of ${labelFor(column)}, next ${n} days`;
+        const fig = document.getElementById("k-value");
+        fig.classList.remove("skeleton");
+        countUp(fig, now, (v) => fmtFig(data, v));
+
+        const delta = document.getElementById("k-delta");
+        if (before !== 0) {
+            const change = (now - before) / Math.abs(before) * 100;
+            delta.innerHTML = Math.abs(change) < 1
+                ? `<span class="delta">About the same as the last ${n} days</span>`
+                : `<span class="delta">${change > 0 ? "▲" : "▼"} ${Math.abs(change).toFixed(0)}% vs the last ${n} days</span>`;
+        } else { delta.innerHTML = ""; }
+
+        const a = data.accuracy, errs = document.getElementById("k-errs"), up = (v) => Math.ceil(v);
+        // Rounded UP: these were measured on the same past periods used to choose the method, so they run slightly optimistic.
+        if (a) {
+            const rows = [];
+            if (a.weekly_error_pct != null) rows.push(["Weekly " + unitWord(data), up(a.weekly_error_pct)]);
+            rows.push(["Single day", up(a.daily_error_pct)]);
+            if (a.total_error_pct != null) rows.push([a.window_days + "-day " + unitWord(data), up(a.total_error_pct)]);
+            errs.innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>about ${v}% off</dd></div>`).join("");
+            const m = document.getElementById("k-method");
+            m.classList.remove("skeleton"); m.textContent = a.method_label.charAt(0).toUpperCase() + a.method_label.slice(1);
+            document.getElementById("k-tested").textContent = `Best of ${a.methods_tested} method${a.methods_tested > 1 ? "s" : ""} tested on your past data` + (data.rows_per_day > 1.2 && column !== "record_count" ? `. Each day is the ${isSum ? "total" : "average"} of about ${Math.round(data.rows_per_day)} rows.` : ".");
+        } else {
+            errs.innerHTML = `<div><dt>Not enough history yet to measure accuracy</dt><dd></dd></div>`;
+            const m = document.getElementById("k-method"); m.classList.remove("skeleton"); m.textContent = "Recent level and trend";
+            document.getElementById("k-tested").textContent = "";
+        }
+    }
+
+    function renderTable(data) {
+        const body = document.getElementById("forecast-rows");
+        const src = data.weekly || { forecast_dates: data.forecast_dates, forecast_values: data.forecast_values, forecast_low: data.forecast_low, forecast_high: data.forecast_high };
+        document.getElementById("table-title").textContent = data.weekly ? "Forecast by week" : "Forecast by day";
+        document.getElementById("th-when").textContent = data.weekly ? "Week of" : "Day";
+        body.innerHTML = src.forecast_dates.map((d, i) => {
+            const lo = src.forecast_low ? fmtFig(data, src.forecast_low[i]) : "-", hi = src.forecast_high ? fmtFig(data, src.forecast_high[i]) : "-";
+            return `<tr><td>${fmtDate(d)}</td><td><strong>${fmtFig(data, src.forecast_values[i])}</strong></td><td>${lo}</td><td>${hi}</td></tr>`;
+        }).join("");
+    }
+
+    function download(name, href) { const a = document.createElement("a"); a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+    document.getElementById("dl-png").addEventListener("click", () => { if (chart) download(`${currentColumn}_${currentView}_chart.png`, chart.toBase64Image("image/png", 1)); });
+    document.getElementById("dl-csv").addEventListener("click", () => {
+        if (!currentData) return;
+        const d = currentData, rows = ["date,forecast,likely_low,likely_high"];
+        d.forecast_dates.forEach((date, i) => rows.push([date, d.forecast_values[i].toFixed(2), d.forecast_low ? d.forecast_low[i].toFixed(2) : "", d.forecast_high ? d.forecast_high[i].toFixed(2) : ""].join(",")));
+        download(`${currentColumn}_forecast.csv`, URL.createObjectURL(new Blob([rows.join("\n")], { type: "text/csv" })));
+    });
+
+    async function loadForecast(column) {
+        const statusEl = document.getElementById("status"), box = document.getElementById("chart-box");
+        currentColumn = column; statusEl.textContent = ""; box.classList.add("updating");
+        let response;
+        try { response = await fetch(`/api/forecast?dataset=${encodeURIComponent(DATASET)}&column=${encodeURIComponent(column)}`); }
+        catch (e) { statusEl.textContent = "Cannot reach the server. Check that Auto-Analyst is still running."; box.classList.remove("updating"); return; }
+        if (!response.ok) {
+            let message = `Server error (${response.status}). Try again.`;
+            try { const body = await response.json(); if (body && body.error) message = body.error; } catch (ignore) {}
+            statusEl.textContent = message; box.classList.remove("updating"); return;
+        }
+        let data;
+        try { data = await response.json(); } catch (e) { statusEl.textContent = "The server sent a reply that could not be read."; box.classList.remove("updating"); return; }
+        if (data.error) { statusEl.textContent = data.error; box.classList.remove("updating"); return; }
+
+        currentData = data;
+        const avail = { weekly: !!data.weekly, daily: true, monthly: !!data.monthly };
+        document.querySelectorAll(".seg button").forEach((b) => { b.disabled = !avail[b.dataset.view]; });
+        if (!avail[currentView]) currentView = avail.weekly ? "weekly" : "daily";
+        showSummary(data, column); renderTable(data); drawChart();
+        box.classList.remove("updating");
+    }
+
+    document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
+        if (!currentData || b.disabled) return;
+        currentView = b.dataset.view; drawChart();
+    }));
+    const select = document.getElementById("column-select");
+    select.addEventListener("change", () => { document.getElementById("suggestion-note").textContent = ""; loadForecast(select.value); });
+    window.addEventListener("themechange", () => { if (currentData) drawChart(); });
+    loadForecast(select.value);
+</script>
+{% endif %}
+{% endblock %}

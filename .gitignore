@@ -1,8 +1,21 @@
+# Python
 venv/
+.venv/
 __pycache__/
 *.pyc
+
+# Things the app creates while it runs (it makes these folders itself)
 auto_analyst.db
-uploads/*.csv
-reports/*.html
-.vscode/
+*.db
+uploads/
+reports/
+
+# Data files stay out of the repository. GitHub rejects files over 100 MB, and your own data is private.
 *.csv
+# ...except the small demo and test files that ship with the project
+!static/demo_daily_sales_2023_2025.csv
+!test_datasets/*.csv
+
+# Editors
+.vscode/
+.idea/
