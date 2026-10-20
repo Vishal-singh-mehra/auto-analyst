@@ -153,6 +153,12 @@ def home_page(error=None):
     return render_template("index.html", datasets=datasets, has_demo=os.path.exists(DEMO_FILE), error=error)
 
 
+@app.errorhandler(413)
+def file_too_large(_error):
+    limit = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return home_page(error=f"That file is too large. This server accepts files up to {limit} MB."), 413
+
+
 @app.route("/")
 def home():
     return home_page()
@@ -325,6 +331,32 @@ def api_forecast():
     if result is None:
         return jsonify({"error": "Not enough data to forecast this column"}), 400
     return jsonify(result)
+
+
+def seed_demo_in_background():
+    """
+    A free server wipes its disk whenever it sleeps, so after waking it would have no data at all.
+    With SEED_DEMO=1 the demo dataset is loaded in the background at start-up, and its forecast is
+    prepared in advance, so the dashboard has something to show right away.
+    """
+    def work():
+        try:
+            if list_datasets() or not os.path.exists(DEMO_FILE):
+                return
+            cleaned, _, _ = clean_dataframe(read_csv_flexibly(DEMO_FILE))
+            table = save_to_database(cleaned, os.path.basename(DEMO_FILE))
+            info = detect_forecastable_columns(cleaned, total_rows=len(cleaned))
+            if info:
+                cached_forecast(table, info["value_col"])
+            app.logger.info("demo dataset ready")
+        except Exception:
+            app.logger.exception("could not load the demo dataset")
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+if os.environ.get("SEED_DEMO") == "1":
+    seed_demo_in_background()
 
 
 if __name__ == "__main__":
