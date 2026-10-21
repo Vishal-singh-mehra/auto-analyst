@@ -32,7 +32,8 @@ Single days are mostly random noise, so the dashboard defaults to the weekly vie
 Needs Python 3.10 to 3.13 (3.12 recommended).
 
 ```bash
-git clone https://github.com/<your-username>/auto-analyst.git
+git clone https://github.com/
+Vishal-singh-mehra/auto-analyst.git
 cd auto-analyst
 python -m venv venv
 venv\Scripts\activate          # Windows
