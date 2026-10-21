@@ -12,8 +12,10 @@ from werkzeug.utils import secure_filename
 
 from cleaner import clean_dataframe
 from database import (
-    dataset_version, delete_dataset, get_numeric_columns, list_datasets, load_forecast_frame, load_sample, save_to_database,
+    dataset_version, delete_dataset, get_numeric_columns, list_datasets, load_forecast_frame, load_profile_sample,
+    load_sample, save_to_database, table_date_range,
 )
+from profiler import build_overview, distribution, visible_columns
 from forecaster import COUNT_COL, ForecastError, date_columns, detect_forecastable_columns, forecast_for_column
 
 app = Flask(__name__)
@@ -303,6 +305,61 @@ def dashboard():
         datasets=datasets,
         dataset=dataset,
     )
+
+
+_profile_results = {}
+
+
+def cached_overview(dataset):
+    version = dataset_version(dataset)
+    with _cache_lock:
+        hit = _profile_results.get(dataset)
+        if hit and hit["version"] == version:
+            return hit["payload"]
+    sample = load_profile_sample(dataset)
+    payload = build_overview(sample, version[0], table_date_range(dataset))
+    with _cache_lock:
+        _profile_results[dataset] = {"version": version, "payload": payload}
+    return payload
+
+
+def report_url_for(dataset):
+    """Link to the full statistical report, if one was made for this dataset's file."""
+    for item in list_datasets():
+        if item["table"] == dataset and item["name"]:
+            name = f"{item['name'].rsplit('.', 1)[0]}_report.html"
+            if os.path.exists(os.path.join(REPORT_FOLDER, name)):
+                return f"/report/{name}"
+    return None
+
+
+@app.route("/api/profile")
+def api_profile():
+    dataset, _ = resolve_dataset(request.args.get("dataset"))
+    if dataset is None:
+        return jsonify({"error": "No data yet. Upload a CSV first."}), 400
+    try:
+        payload = dict(cached_overview(dataset))
+    except Exception:
+        app.logger.exception("overview failed")
+        return jsonify({"error": "Could not read this dataset."}), 400
+    payload["report_url"] = report_url_for(dataset)
+    return jsonify(payload)
+
+
+@app.route("/api/distribution")
+def api_distribution():
+    dataset, _ = resolve_dataset(request.args.get("dataset"))
+    if dataset is None:
+        return jsonify({"error": "No data yet. Upload a CSV first."}), 400
+    column = request.args.get("column", "")
+    try:
+        sample = load_profile_sample(dataset)
+    except Exception:
+        return jsonify({"error": "Could not read this dataset."}), 400
+    if column not in visible_columns(sample):             # only real columns of this dataset are accepted
+        return jsonify({"error": f"'{column}' is not a column of this dataset"}), 400
+    return jsonify(distribution(sample, column))
 
 
 @app.route("/api/forecast")

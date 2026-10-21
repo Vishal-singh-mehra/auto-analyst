@@ -13,6 +13,7 @@ Built for small businesses that keep sales records but have no analyst, as a pro
 - **Shows its reasoning.** Explains why a column was chosen, lets you pick another, and shows typical error with a shaded likely range.
 - **Works on different kinds of data.** Adds up sales-type columns and averages things like temperature. For event-style data (one row per ticket or visit) it can forecast records per day.
 - **Dashboard.** Weekly, daily and monthly views, light and dark themes, and downloads for the chart (PNG) and the forecast (CSV).
+- **Data overview tab.** Charts of how any column is spread, plain-language findings on what moves together (with a heatmap), and a table of every column. It works even when a file has nothing to forecast.
 
 ## How accurate is it?
 
@@ -31,7 +32,7 @@ Single days are mostly random noise, so the dashboard defaults to the weekly vie
 Needs Python 3.10 to 3.13 (3.12 recommended).
 
 ```bash
-git clone https://github.com/Vishal-singh-mehra/auto-analyst.git
+git clone https://github.com/<your-username>/auto-analyst.git
 cd auto-analyst
 python -m venv venv
 venv\Scripts\activate          # Windows
@@ -49,7 +50,8 @@ The `test_datasets/` folder has eight deliberately awkward files (messy rupee am
 1. **Clean** (`cleaner.py`): detects dates and numbers hidden in text, removes duplicates and empty columns, fills gaps.
 2. **Store** (`database.py`): each file gets its own table in a local SQLite database.
 3. **Forecast** (`forecaster.py`): picks the date and metric columns, tries four methods (recent trend, day-of-week pattern, same period last year, yearly cycle), tests each on past data, and keeps the best.
-4. **Show** (`app.py`, `templates/`, `static/`): Flask serves the pages and a JSON API; Chart.js draws the charts.
+4. **Describe** (`profiler.py`): summarises every column, builds the distribution charts and finds which numbers move together.
+5. **Show** (`app.py`, `templates/`, `static/`): Flask serves the pages and a JSON API; Chart.js draws the charts.
 
 ## Settings
 
@@ -71,6 +73,7 @@ app.py            routes and page logic
 cleaner.py        data cleaning
 database.py       storage (one table per uploaded file)
 forecaster.py     column detection, forecasting methods, accuracy testing
+profiler.py       the data overview (column summaries, distributions, correlations)
 templates/        HTML pages
 static/           stylesheet and the demo file
 test_datasets/    eight test files with expected results

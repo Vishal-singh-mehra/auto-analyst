@@ -16,14 +16,27 @@
         {% endif %}
     </div>
 
-    {% if no_data %}
+    {% if not dataset %}
     <div class="empty">
-        <h2>{{ message or "Nothing to show yet" }}</h2>
-        <p class="hint">{% if message %}Pick another dataset above, or upload a file that has a date column and a number to forecast.{% else %}Upload a CSV file and your forecast will appear here.{% endif %}</p>
+        <h2>Nothing to show yet</h2>
+        <p class="hint">Upload a CSV file and your forecast and data overview will appear here.</p>
         <a class="btn btn-primary" href="/">Upload a file</a>
     </div>
     {% else %}
 
+    <div class="tabs" role="tablist" aria-label="Dashboard sections">
+        <button class="tab" role="tab" type="button" data-tab="forecast" aria-selected="true">Forecast</button>
+        <button class="tab" role="tab" type="button" data-tab="overview" aria-selected="false">Data overview</button>
+    </div>
+
+    <div id="tab-forecast" role="tabpanel">
+    {% if no_data %}
+        <div class="empty">
+            <h2>{{ message or "Nothing to forecast here" }}</h2>
+            <p class="hint">The data overview still works for this file. Open it to see what is in your data.</p>
+            <button class="btn btn-primary" type="button" id="go-overview">Open the data overview</button>
+        </div>
+    {% else %}
     <div class="controls">
         <label class="field"><span>Forecast</span>
             <select id="column-select">
@@ -90,6 +103,59 @@
     </details>
 
     {% endif %}
+    </div>
+
+    <div id="tab-overview" role="tabpanel" hidden>
+        <p id="ov-status" class="status" role="status"></p>
+        <section class="strip">
+            <div class="cell">
+                <div class="cell-label">Size of the dataset</div>
+                <div class="figure skeleton" id="ov-rows">000,000 rows</div>
+                <div class="hint" id="ov-cols" style="margin-top: 8px;">&nbsp;</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">Time span</div>
+                <div class="method skeleton" id="ov-span">1 Jan 2021 to 31 Dec 2025</div>
+                <div class="hint" id="ov-days" style="margin-top: 6px;"></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">What is in it</div>
+                <div class="kinds" id="ov-kinds"></div>
+                <div class="hint" id="ov-sample" style="margin-top: 8px;"></div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-head">
+                <h2 class="panel-title">Explore a column</h2>
+                <label class="field"><span>Column</span><select id="dist-select" aria-label="Column to explore"></select></label>
+            </div>
+            <div class="chart-box short"><canvas id="distChart" role="img" aria-label="How the values of the chosen column are spread"></canvas></div>
+            <p class="hint" id="dist-note" style="margin: 10px 0 0;"></p>
+        </section>
+
+        <section class="panel">
+            <h2 class="panel-title" style="margin-bottom: 10px;">What moves together</h2>
+            <ul class="pairs" id="pairs"></ul>
+            <div class="table-wrap" id="heat-wrap"></div>
+            <div class="legend-scale" id="heat-legend" hidden>
+                <span><i style="background: color-mix(in srgb, var(--data) 85%, var(--surface));"></i>rise together</span>
+                <span><i style="background: color-mix(in srgb, var(--forecast) 85%, var(--surface));"></i>one rises as the other falls</span>
+                <span><i style="background: var(--surface); border: 1px solid var(--rule-strong);"></i>no clear link</span>
+            </div>
+            <p class="hint" style="margin: 10px 0 0;">A link between two columns does not prove that one causes the other.</p>
+        </section>
+
+        <details class="panel" open>
+            <summary>Every column at a glance</summary>
+            <div class="body"><div class="table-wrap">
+                <table class="mini col-table"><thead><tr><th>Column</th><th>Type</th><th>Different values</th><th>Typical value</th><th>Lowest to highest / most common</th></tr></thead><tbody id="col-rows"></tbody></table>
+            </div></div>
+        </details>
+
+        <p id="ov-report" class="hint"></p>
+    </div>
+    {% endif %}
 </main>
 {% endblock %}
 
@@ -101,28 +167,213 @@
     });
 </script>
 {% endif %}
-{% if not no_data %}
+
+{% if dataset %}
 <script>
     const DATASET = {{ dataset|tojson }};
+    const NO_FORECAST = {{ "true" if no_data else "false" }};
+
+    // ---- helpers shared by both tabs ----
+    function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+    function fmtNum(v) { return Math.round(v).toLocaleString(); }
+    function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+    function short(v) {
+        const a = Math.abs(v);
+        if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+        if (a >= 1e4) return (v / 1e3).toFixed(0) + "K";
+        if (a >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+        return String(Math.round(v * 100) / 100);
+    }
+    function fmtDate(iso, kind) {
+        const [y, m, d] = iso.split("-").map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString("en-GB", kind === "month" ? { month: "short", year: "numeric" } : kind === "full" ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" });
+    }
+    function niceValue(v) {
+        if (v === null || v === undefined) return "-";
+        const a = Math.abs(v);
+        return a >= 1000 ? Math.round(v).toLocaleString() : (Math.round(v * 100) / 100).toLocaleString();
+    }
+
+    // ---- tabs ----
+    function showTab(name) {
+        document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", t.dataset.tab === name));
+        document.getElementById("tab-forecast").hidden = name !== "forecast";
+        document.getElementById("tab-overview").hidden = name !== "overview";
+        history.replaceState(null, "", name === "overview" ? "#overview" : location.pathname + location.search);
+        if (name === "overview") loadOverview();
+        else if (typeof chart !== "undefined" && chart) chart.resize();
+    }
+    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+    const goOverview = document.getElementById("go-overview");
+    if (goOverview) goOverview.addEventListener("click", () => showTab("overview"));
+
+    // ---- data overview ----
+    let overviewLoaded = false, distChart = null, overviewData = null;
+
+    async function loadOverview() {
+        if (overviewLoaded) return;
+        overviewLoaded = true;
+        const status = document.getElementById("ov-status");
+        let response;
+        try { response = await fetch(`/api/profile?dataset=${encodeURIComponent(DATASET)}`); }
+        catch (e) { status.textContent = "Cannot reach the server. Check that Auto-Analyst is still running."; overviewLoaded = false; return; }
+        let data = null;
+        try { data = await response.json(); } catch (e) {}
+        if (!response.ok || !data || data.error) { status.textContent = (data && data.error) || "Could not load the data overview."; overviewLoaded = false; return; }
+        overviewData = data;
+        renderOverview(data);
+    }
+
+    function renderOverview(d) {
+        const rows = document.getElementById("ov-rows");
+        rows.classList.remove("skeleton");
+        rows.textContent = `${d.rows.toLocaleString()} rows`;
+        document.getElementById("ov-cols").textContent = `${d.columns} columns`;
+
+        const span = document.getElementById("ov-span");
+        span.classList.remove("skeleton");
+        if (d.date) {
+            span.textContent = `${fmtDate(d.date.first, "full")} to ${fmtDate(d.date.last, "full")}`;
+            document.getElementById("ov-days").textContent = `${d.date.days.toLocaleString()} days, from the column ${d.date.column.replace(/_/g, " ")}`;
+        } else {
+            span.textContent = "No date column";
+            document.getElementById("ov-days").textContent = "So there is nothing to forecast over.";
+        }
+
+        const kinds = [["number", "numbers", "k-number"], ["date", "dates", "k-date"], ["text", "text", "k-text"]];
+        document.getElementById("ov-kinds").innerHTML = kinds.filter(([k]) => d.kinds[k] > 0)
+            .map(([k, label, cls]) => `<span class="chip ${cls}">${d.kinds[k]} ${label}</span>`).join("");
+        document.getElementById("ov-sample").textContent = d.sampled
+            ? `Charts below use a random sample of ${d.sample_rows.toLocaleString()} of the ${d.rows.toLocaleString()} rows.`
+            : "Charts below use every row.";
+
+        // column chooser
+        const select = document.getElementById("dist-select");
+        select.innerHTML = "";
+        d.column_table.forEach((c) => select.appendChild(new Option(c.name, c.name)));
+        const firstGood = d.column_table.find((c) => c.kind === "number" && !c.id_like) || d.column_table[0];
+        if (firstGood) select.value = firstGood.name;
+        select.onchange = () => loadDistribution(select.value);
+        if (firstGood) loadDistribution(firstGood.name);
+
+        renderRelations(d.correlations);
+        renderColumnTable(d.column_table);
+
+        const report = document.getElementById("ov-report");
+        report.innerHTML = d.report_url ? `Want every statistic? <a href="${esc(d.report_url)}" target="_blank" rel="noopener">Open the full statistical report</a> in a new tab.` : "";
+    }
+
+    function describePair(p) {
+        const a = esc(p.a.replace(/_/g, " ")), b = esc(p.b.replace(/_/g, " ")), strong = Math.abs(p.r) >= 0.7;
+        if (p.r > 0) return `<strong>${a}</strong> and <strong>${b}</strong> ${strong ? "rise and fall together" : "tend to rise together"}.`;
+        return `When <strong>${a}</strong> rises, <strong>${b}</strong> ${strong ? "usually falls" : "tends to fall"}.`;
+    }
+
+    function renderRelations(c) {
+        const strong = c.pairs.filter((p) => Math.abs(p.r) >= 0.4);
+        const list = document.getElementById("pairs");
+        list.innerHTML = strong.length
+            ? strong.map((p) => `<li><span class="r ${p.r > 0 ? "pos" : "neg"}">${p.r > 0 ? "+" : "-"}${Math.abs(p.r).toFixed(2)}</span><span>${describePair(p)}</span></li>`).join("")
+            : `<li><span>No two number columns show a clear link in this data.</span></li>`;
+
+        const wrap = document.getElementById("heat-wrap"), legend = document.getElementById("heat-legend");
+        if (c.columns.length < 2) { wrap.innerHTML = ""; legend.hidden = true; return; }
+        legend.hidden = false;
+        const head = c.columns.map((n) => `<th class="col"><span>${esc(n.replace(/_/g, " "))}</span></th>`).join("");
+        const body = c.columns.map((n, i) => `<tr><th class="row">${esc(n.replace(/_/g, " "))}</th>` + c.matrix[i].map((r, j) => {
+            if (r === null) return `<td></td>`;
+            const strength = Math.min(1, Math.abs(r)), colour = r >= 0 ? "--data" : "--forecast";
+            const text = strength > 0.55 ? "var(--surface)" : "var(--ink)";
+            return `<td style="background: color-mix(in srgb, var(${colour}) ${Math.round(strength * 85)}%, var(--surface)); color: ${text};" title="${esc(c.columns[i])} and ${esc(c.columns[j])}: ${r.toFixed(2)}">${i === j ? "" : r.toFixed(2)}</td>`;
+        }).join("") + `</tr>`).join("");
+        wrap.innerHTML = `<table class="heat"><thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function renderColumnTable(cols) {
+        const chip = { number: ["number", "k-number"], date: ["date", "k-date"], text: ["text", "k-text"] };
+        document.getElementById("col-rows").innerHTML = cols.map((c) => {
+            const [label, cls] = chip[c.kind];
+            let typical = "-", range = "-";
+            if (c.kind === "number") { typical = niceValue(c.median); range = `${niceValue(c.min)} to ${niceValue(c.max)}`; }
+            else if (c.kind === "date") { typical = c.time_only ? "time of day" : "-"; range = c.time_only ? `${esc(c.min)} to ${esc(c.max)}` : `${fmtDate(c.min, "full")} to ${fmtDate(c.max, "full")}`; }
+            else if (c.top !== undefined) { typical = "-"; range = `${esc(c.top)} (${Math.round(c.top_share * 100)}%)`; }
+            const note = c.id_like ? ' <span class="hint">(looks like an ID)</span>' : "";
+            return `<tr><td>${esc(c.name)}</td><td><span class="chip ${cls}">${label}</span>${note}</td><td class="num">${c.distinct.toLocaleString()}</td><td class="num">${typical}</td><td class="num">${range}</td></tr>`;
+        }).join("");
+    }
+
+    async function loadDistribution(column) {
+        const note = document.getElementById("dist-note");
+        let d = null;
+        try {
+            const response = await fetch(`/api/distribution?dataset=${encodeURIComponent(DATASET)}&column=${encodeURIComponent(column)}`);
+            d = await response.json();
+            if (!response.ok || d.error) { note.textContent = (d && d.error) || "Could not load this column."; return; }
+        } catch (e) { note.textContent = "Cannot reach the server."; return; }
+        drawDistribution(d);
+    }
+
+    function drawDistribution(d) {
+        if (distChart) distChart.destroy();
+        const note = document.getElementById("dist-note"), sampled = overviewData && overviewData.sampled;
+        const sampleText = sampled ? ` Based on a random sample of ${overviewData.sample_rows.toLocaleString()} rows.` : "";
+        let labels = [], horizontal = false, title = "Number of rows";
+        if (d.kind === "histogram") {
+            labels = d.counts.map((_, i) => `${short(d.edges[i])} to ${short(d.edges[i + 1])}`);
+            note.textContent = `How many rows fall in each range of values.${sampleText}`;
+        } else if (d.kind === "bars") {
+            labels = d.labels.map(String);
+            note.textContent = `This column has only a few different values, so each gets its own bar.${sampleText}`;
+        } else if (d.kind === "months") {
+            labels = d.labels.map((m) => fmtDate(m + "-01", "month"));
+            note.textContent = `How many rows fall in each month.${sampleText}`;
+        } else if (d.kind === "hours") {
+            labels = d.labels;
+            note.textContent = `How many rows fall in each hour of the day.${sampleText}`;
+        } else if (d.kind === "top") {
+            labels = d.labels.map((s) => (s.length > 24 ? s.slice(0, 23) + "…" : s));
+            horizontal = true;
+            note.textContent = d.distinct > d.labels.length
+                ? `The ${d.labels.length} most common of ${d.distinct.toLocaleString()} different values, covering ${Math.round(d.shown_share * 100)}% of rows.${sampleText}`
+                : `All ${d.distinct} different values.${sampleText}`;
+        } else { note.textContent = "There is nothing to show for this column."; return; }
+
+        const muted = css("--muted"), grid = css("--rule"), surface = css("--surface");
+        // The axis that shows COUNTS gets short numbers (12K). The axis that shows the column's own values keeps its labels.
+        const axis = (which) => {
+            const showsCounts = (which === "x") === horizontal;
+            const ticks = { color: muted };
+            if (showsCounts) ticks.callback = (v) => short(v);
+            if (which === "x" && !horizontal) { ticks.maxRotation = 55; ticks.autoSkip = true; ticks.maxTicksLimit = 10; }
+            return { grid: { display: showsCounts, color: grid }, border: { display: false }, ticks };
+        };
+        distChart = new Chart(document.getElementById("distChart"), {
+            type: "bar",
+            data: { labels, datasets: [{ label: title, data: d.counts, backgroundColor: css("--data"), borderRadius: 3, maxBarThickness: horizontal ? 22 : 40 }] },
+            plugins: [{ id: "bg", beforeDraw(c) { c.ctx.save(); c.ctx.fillStyle = surface; c.ctx.fillRect(0, 0, c.width, c.height); c.ctx.restore(); } }],
+            options: {
+                indexAxis: horizontal ? "y" : "x", responsive: true, maintainAspectRatio: false, animation: false, resizeDelay: 80,
+                scales: { x: axis("x"), y: axis("y") },
+                plugins: { legend: { display: false }, tooltip: { callbacks: { title: (items) => items[0].label, label: (ctx) => `${ctx.parsed[horizontal ? "x" : "y"].toLocaleString()} rows` } } },
+            },
+        });
+    }
+    window.addEventListener("themechange", () => { if (distChart && overviewData) { const s = document.getElementById("dist-select"); loadDistribution(s.value); } });
+
+    // open on the right tab: the overview when there is nothing to forecast, or when the link asks for it
+    if (NO_FORECAST || location.hash === "#overview") showTab("overview");
+</script>
+{% endif %}
+
+{% if dataset and not no_data %}
+<script>
     let chart = null, currentData = null, currentView = "weekly", currentColumn = null;
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    const fmtNum = (v) => Math.round(v).toLocaleString();
     const labelFor = (col) => col === "record_count" ? "number of records per day" : col.replace(/_/g, " ");
     const unitWord = (data) => data.aggregation === "sum" ? "total" : "average";
     const fmtFig = (data, v) => data.aggregation === "sum" || Math.abs(v) >= 100 ? fmtNum(v) : v.toFixed(1);
 
-    function short(v) {
-        const a = Math.abs(v);
-        if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
-        if (a >= 1e3) return (v / 1e3).toFixed(0) + "K";
-        return String(Math.round(v));
-    }
-    function fmtDate(iso, kind) {
-        const [y, m, d] = iso.split("-").map(Number);
-        return new Date(y, m - 1, d).toLocaleDateString("en-GB", kind === "month" ? { month: "short", year: "numeric" } : { day: "numeric", month: "short" });
-    }
     function rollingAverage(values, window = 7) {
         return values.map((_, i) => {
             const slice = values.slice(Math.max(0, i - window + 1), i + 1);

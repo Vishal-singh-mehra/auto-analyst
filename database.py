@@ -15,6 +15,8 @@ LEGACY_TABLE = "sales_data"  # the single shared table used by earlier versions 
 
 _lock = threading.Lock()
 _sample_cache = {}           # table name -> {"version": ..., "df": ...}
+_profile_cache = {}          # a larger sample, used only for the data overview
+PROFILE_ROWS = int(os.environ.get("PROFILE_SAMPLE_ROWS", "20000"))
 
 
 def table_name_for(filename):
@@ -75,7 +77,8 @@ def save_to_database(df, source_filename):
     # chunksize keeps memory flat while saving big files
     df.to_sql(table_name, engine, if_exists="replace", index=False, chunksize=5000)
     with _lock:
-        _sample_cache.pop(table_name, None)          # new data: the cached sample is out of date
+        _sample_cache.pop(table_name, None)          # new data: the cached samples are out of date
+        _profile_cache.pop(table_name, None)
     return table_name
 
 
@@ -148,4 +151,42 @@ def delete_dataset(table_name):
         conn.execute(text(f'DROP TABLE "{table_name}"'))
     with _lock:
         _sample_cache.pop(table_name, None)
+        _profile_cache.pop(table_name, None)
     return True
+
+
+def load_profile_sample(table_name):
+    """Up to PROFILE_ROWS random rows, for the data overview. Kept in memory until new data arrives."""
+    version = dataset_version(table_name)
+    with _lock:
+        cached = _profile_cache.get(table_name)
+        if cached and cached["version"] == version:
+            return cached["df"]
+    query = text(
+        f'SELECT * FROM "{table_name}" WHERE rowid IN '
+        f'(SELECT rowid FROM "{table_name}" ORDER BY RANDOM() LIMIT {PROFILE_ROWS})'
+    )
+    df = pd.read_sql_query(query, engine)
+    # Only the columns the small sample showed to be dates are converted: parsing every text column is slow.
+    for column in date_columns(load_sample(table_name)):
+        if column in df.columns:
+            df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed")
+    with _lock:
+        _profile_cache[table_name] = {"version": version, "df": df}
+    return df
+
+
+def table_date_range(table_name):
+    """First and last date of the main date column, and how many days that spans (exact, from the whole table)."""
+    sample = load_sample(table_name)
+    cols = date_columns(sample)
+    if not cols:
+        return None
+    column = _pick_date_column(sample, cols)
+    with engine.connect() as conn:
+        first, last = conn.execute(text(f'SELECT MIN("{column}"), MAX("{column}") FROM "{table_name}"')).one()
+    first, last = pd.to_datetime(first, errors="coerce"), pd.to_datetime(last, errors="coerce")
+    if pd.isna(first) or pd.isna(last):
+        return None
+    return {"column": column, "first": first.strftime("%Y-%m-%d"), "last": last.strftime("%Y-%m-%d"),
+            "days": int((last.normalize() - first.normalize()).days + 1)}
